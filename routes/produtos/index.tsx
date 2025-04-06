@@ -1,8 +1,9 @@
+// Copyright ...
 import type { State } from "@/plugins/session.ts";
 import Head from "@/components/Head.tsx";
 import ProductLayout from "@/islands/ProductLayout.tsx";
-import { Handlers, PageProps } from "$fresh/server.ts";
-import {listProducts, Product} from "../utils/db.ts";
+import { defineRoute, Handlers, PageProps } from "$fresh/server.ts";
+import {listProducts, Product} from "../../utils/db.ts";
 
 
 export const handler: Handlers<Product[], State> = {
@@ -17,7 +18,7 @@ export const handler: Handlers<Product[], State> = {
     },
 };
 
-export default function Home(props: PageProps<Product[], State>) {
+export default function ProdutosPage(props: PageProps<Product[], State>) {
     const isSignedIn = props.state.sessionUser !== undefined;
     const endpoint = "/api/produtos";
 
@@ -39,12 +40,14 @@ export default function Home(props: PageProps<Product[], State>) {
                     />
                 )}
             </Head>
-            <main class="">
+            <main className="p-4 space-y-8">
+                <h1 className="text-2xl font-bold">All Products</h1>
                 <ProductLayout
-                    endpoint={endpoint}
+                    endpoint="/products" // <-- explicitly passing endpoint
+                    type="grid"
                     initialProducts={props.data}
-                    type="carousel"
                 />
             </main>
         </>
     )}
+
