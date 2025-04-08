@@ -1,6 +1,6 @@
-type ProfileStatus = 'active' | 'pending' | 'inactive';
-
 // public-facing display layer
+import {ProfileStatus} from "./shared.ts";
+
 interface BaseProfile {
     id: string;
     userId: string;

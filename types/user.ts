@@ -1,6 +1,6 @@
 // identity, authentication, and permissions
 
-type UserRole =  'customer' | 'brand' | 'admin'  | 'super';
+import {UserRole} from "./shared.ts";
 
 export interface User {
     id: string; // ULID or UUID

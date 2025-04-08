@@ -1,5 +1,4 @@
-import {InvoiceStatus, TransactionStatus} from "./shared.ts";
-type PaymentMethodProvider = 'stripe' | 'pix';
+import {InvoiceStatus, PaymentMethodProvider, TransactionStatus} from "./shared.ts";
 
 export interface PaymentMethod {
     id: string; // reference to Stripe setup ID or similar
