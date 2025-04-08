@@ -40,7 +40,7 @@ export async function collectValues<T>(iter: Deno.KvListIterator<T>) {
 
 // identity, authentication, and permissions
 
-type UserRole = 'brand' | 'admin' | 'customer';
+type UserRole =  'customer' | 'brand' | 'admin'  | 'super';
 
 export interface User {
   id: string; // ULID or UUID
@@ -49,33 +49,34 @@ export interface User {
   passwordHash: string; // tbd hash encryption
   role: UserRole;
   createdAt: string; // ISO timestamp
+  lastLoginAt?: string; // for auditing / UX
+  isDisabled?: boolean; // soft bans, inactive accounts
 }
 
 type ProfileStatus = 'active' | 'pending' | 'inactive';
 
 // public-facing display layer
-export interface BrandProfile {
-  id: string;           // ULID (separate from User.id)
-  userId: string;       // Foreign Key to User.id
-  title: string;        // Public display name
-  slug: string;         // URL-friendly slug, unique per brand e.g. sim-sukeban
-  bio?: string;
-  website?: string;
-  logoUrl?: string;
-  createdAt: string;    // ISO timestamp
+interface BaseProfile {
+  id: string;
+  userId: string;
+  createdAt: string;
   status: ProfileStatus;
 }
 
-export interface CustomerProfile {
-    id: string;           // ULID (separate from User.id)
-    userId: string;        // Foreign Key to User.id
-    displayName?: string;  // public or semi-public name
-    avatarUrl?: string;
-    preferences?: Record<string, unknown>; // themes, filters, etc.
-    createdAt: string;
-    status: ProfileStatus;
-    language?: string; // ISO 639-1 — e.g. "en", "ja"
-  }
+interface BrandProfile extends BaseProfile {
+  title: string;
+  slug: string;
+  bio?: string;
+  website?: string;
+  logoUrl?: string;
+}
+
+interface CustomerProfile extends BaseProfile {
+  displayName?: string;
+  avatarUrl?: string;
+  preferences?: Record<string, unknown>;
+  language?: string;
+}
 
 // product-related
 export interface Product {
@@ -85,26 +86,45 @@ export interface Product {
   title: string;
   price: number; // price in BRL
   description: string;
-  images: string[];
-  categoryId: string;
+  mainImage: string;
+  images: ProductImage[];
+  categoryId: string; // Having a single source of truth (ProductCategory) for translations means consistent i18n.
+  tagIds: string[]; // "Grunge", "Cyberpunk", "Genderless", "Made in Brazil"
   createdAt: string; // ISO timestamp
-  inventory?: number; // null = infinite
+  inventory?: number | null; // null = infinite
   isAvailable?: boolean; // to toggle visibility
+  updatedAt?: string; // for sorting / change detection
 }
 
-interface ProductCategory {
-  id: string;
-  slug: string;
-  name: Record<string, string>; // { en: "Altwear", ja: "オルトウェア" }
+export interface ProductCategory {
+  id: string; // e.g., "tops", "outerwear"
+  name: Record<string, string>; // Localized names
+  icon?: string; // Optional icon/image for UI use
+  order?: number; // For sorting categories in UI
+}
+
+export interface ProductTag {
+  id: string; // e.g., "grunge", "genderless"
+  name: Record<string, string>; // Localized tag names
+  color?: string; // Optional for badges
+  description?: Record<string, string>; // If tags need context
+}
+
+interface ProductImage {
+  url: string;
+  alt?: string;
+  priority?: number;
 }
 
 export interface CartItem {
+  userId: string;
   productId: string;
   quantity: number;
   addedAt: string; // ISO timestamp
 }
 
 export interface WishlistItem {
+  userId: string;
   productId: string;
   addedAt: string; // ISO timestamp
 }
@@ -124,6 +144,32 @@ export interface Order {
   status: OrderStatus;
   shippingAddressId: string;
   paymentMethodId: string;
+  couponId?: string;
+  discountAmount?: number;
+}
+
+interface Coupon {
+  id: string;
+  code: string;
+  description?: string;
+  discountType: 'percentage' | 'fixed';
+  value: number; // e.g., 20 for 20% or R$20
+  expiresAt?: string;
+  maxUses?: number;
+  userLimit?: number;
+}
+
+type ReturnStatus = 'requested' | 'approved' | 'rejected' | 'refunded';
+
+interface ReturnRequest {
+  id: string;
+  orderId: string;
+  userId: string;
+  items: OrderItem[];
+  reason: string;
+  status: ReturnStatus;
+  createdAt: string;
+  resolvedAt?: string;
 }
 
 export interface Address {
@@ -136,35 +182,50 @@ export interface Address {
   zip: string;
   country: string;
   phone?: string;
+  isDefault: boolean;
 }
 
 type ShippingCarrier = 'correios' | 'custom' | 'manual';
 type ShippingStatus = 'pending' | 'in_transit' | 'delivered' | 'failed';
 
-export interface Shipping {
-  id: string;                // ULID, matches Order.id or separate
-  orderId: string;           // FK to Order
-  carrier: ShippingCarrier;  // Which carrier is handling it
-  trackingCode?: string;     // e.g., "BR123456789BR"
-  estimatedDelivery?: string; // ISO timestamp
+interface Shipping {
+  id: string;
+  orderId: string;
+  carrier?: ShippingCarrier;
+  trackingCode?: string;
+  estimatedDelivery?: string;
   status: ShippingStatus;
-  lastUpdated: string;       // ISO timestamp
-  history?: Array<{
-    status: ShippingStatus;
-    timestamp: string;       // ISO
-    location?: string;
-    note?: string;
-  }>;
+  lastUpdated: string;
+  history?: ShippingHistoryItem[];
 }
 
+interface ShippingHistoryItem {
+  status: ShippingStatus;
+  timestamp: string;
+  location?: string;
+  note?: string;
+}
+
+type PaymentMethodProvider = 'stripe' | 'pix';
 
 export interface PaymentMethod {
   id: string; // reference to Stripe setup ID or similar
   userId: string;
-  provider: 'stripe';
+  provider: PaymentMethodProvider;
   label: string; // e.g., "Visa ending in 4242"
   lastUsedAt?: string;
   isDefault: boolean;
+  metadata?: Record<string, unknown>; // for stripe/pix token stuff
+}
+
+interface AuditLog {
+  id: string;
+  userId?: string;
+  action: string; // "update_product", "delete_order"
+  targetId?: string;
+  targetType?: string; // "Product", "Order", etc.
+  timestamp: string;
+  metadata?: Record<string, unknown>;
 }
 
 /**
