@@ -144,6 +144,7 @@ export interface PaymentMethod {
   lastUsedAt?: string;
   isDefault: boolean;
 }
+
 /**
  * Random data generators for testing & seeding.
  *
@@ -1177,6 +1178,76 @@ export function listProductsByBrand(
 }
 
 /**
+ * Creates a new customer profile in the database, stored at `["customer", userId]`.
+ * Fails if a profile with the same userId already exists.
+ *
+ * @example
+ * ```ts
+ * await createCustomerProfile({
+ *   id: "cust_01HX...",
+ *   userId: "user_01HX...",
+ *   displayName: "Lain",
+ *   avatarUrl: "https://example.com/avatar.png",
+ *   preferences: { theme: "void" },
+ *   createdAt: new Date().toISOString(),
+ *   status: "active",
+ *   language: "ja"
+ * });
+ * ```
+ *
+ * @param profile - The full `CustomerProfile` object to insert.
+ * @throws If the profile already exists or the atomic operation fails.
+ */
+export async function createCustomer(profile: CustomerProfile): Promise<void> {
+  const key = ["customer", profile.userId];
+
+  const res = await kv.atomic()
+      .check({ key, versionstamp: null })
+      .set(key, profile)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to create customer profile");
+}
+
+/**
+ * Updates an existing customer profile.
+ * Overwrites the profile stored at `["customer", userId]`.
+ *
+ * @example
+ * ```ts
+ * await updateCustomerProfile({ ...existing, status: "inactive" });
+ * ```
+ *
+ * @param profile - The full `CustomerProfile` object to store.
+ * @throws If the atomic update operation fails.
+ */
+export async function updateCustomer(profile: CustomerProfile): Promise<void> {
+  const key = ["customer", profile.userId];
+
+  const res = await kv.atomic()
+      .set(key, profile)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to update customer profile");
+}
+
+/**
+ * Deletes a customer profile from the database.
+ * Removes the profile stored at `["customer", userId]`.
+ *
+ * @example
+ * ```ts
+ * await deleteCustomerProfile("user_01HX...");
+ * ```
+ *
+ * @param userId - The ID of the user whose customer profile to delete.
+ * @throws If the deletion fails.
+ */
+export async function deleteCustomer(userId: string): Promise<void> {
+  await kv.delete(["customer", userId]);
+}
+
+/**
  * Creates a user in the database, indexed by user ID.
  * Fails if a user with the same ID already exists.
  *
@@ -1210,7 +1281,6 @@ export async function createUser(user: User): Promise<void> {
 
   console.log("✅ User created:", user.id);
 }
-
 
 /**
  * Updates an existing user in the database by ID.

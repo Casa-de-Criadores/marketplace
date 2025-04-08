@@ -1,78 +1,104 @@
-import {createProduct, createUser, createBrand, randomBrand, randomUser, randomProduct} from "@/utils/db.ts";
-import { ulid } from "$std/ulid/mod.ts";
+import {
+    random,
+    createUser,
+    createBrand,
+    createProduct,
+    createCustomer,
+    createAddress,
+    createPaymentMethod,
+    createOrder,
+    setCart,
+    setWishlist,
+    createProductCategory,
+} from "@/utils/db.ts";
+import type { User, BrandProfile, Product, CartItem, WishlistItem } from "@/utils/db.ts";
+
+import Chance from "https://esm.sh/chance";
+const chance = new Chance();
 
 // Reference: https://github.com/HackerNews/API
-const API_BASE_URL = `https://hacker-news.firebaseio.com/v0`;
-const API_ITEM_URL = `${API_BASE_URL}/item`;
-const API_TOP_STORIES_URL = `${API_BASE_URL}/topstories.json`;
-const TOP_STORIES_COUNT = 10;
+// const API_BASE_URL = `https://hacker-news.firebaseio.com/v0`;
+// const API_ITEM_URL = `${API_BASE_URL}/item`;
+// const API_TOP_STORIES_URL = `${API_BASE_URL}/topstories.json`;
+// const TOP_STORIES_COUNT = 10;
 
-interface Story {
-  id: number;
-  score: number;
-  time: number; // Unix seconds
-  by: string;
-  title: string;
-  url: string;
-}
+const NUM_BRANDS = 5;
+const NUM_CUSTOMERS = 10;
+const PRODUCTS_PER_BRAND = 8;
 
-// STEP 1 — Fetch HN stories
-const resp = await fetch(API_TOP_STORIES_URL);
-const allTopStories = await resp.json() as number[];
-const topStories = allTopStories.slice(0, TOP_STORIES_COUNT);
+// 1. Seed product categories
+const categories = Array.from({ length: 4 }, () => random.productCategory());
+await Promise.all(categories.map(createProductCategory));
 
-const storyData = await Promise.all(
-    topStories.map((id) =>
-        fetch(`${API_ITEM_URL}/${id}.json`).then((r) => r.json())
-    ),
-);
+// 2. Seed brands + products
+const products: Product[] = [];
 
-// STEP 2 — Map stories into produtos
-const products = storyData
-    .filter(({ url }) => url)
-    .map(({ by: userLogin, title, url, score, time }) => {
-        const base = randomProduct();
-        return {
-            ...base,
-            id: ulid(),
-            userLogin,
-            title,
-            url,
-            score,
-            createdAt: new Date(time * 1000).getTime(),
-        };
-    });
+const brandUsers: Array<{
+    user: User;
+    brand: BrandProfile;
+    products: Product[];
+}> = [];
 
-// STEP 3 — Derive marcas using randomBrand() + override userLogin
-const uniqueLogins = new Set(products.map((p) => p.userLogin));
-const brands = [...uniqueLogins].map((login) => {
-    const brand = randomBrand();
-    return {
-        ...brand,
-        userLogin: login,
-    };
-});
-
-// STEP 4 — Map userLogin → brandId
-const brandIdMap = new Map(brands.map((b) => [b.userLogin, b.id]));
-
-// STEP 5 — Attach brandId to produtos
-const productsWithBrand = products.map((p) => ({
-    ...p,
-    brandId: brandIdMap.get(p.userLogin),
-}));
-// STEP 6 — Seed marcas
-await Promise.all(brands.map(createBrand));
-
-// STEP 7 — Seed produtos
-await Promise.all(productsWithBrand.map(createProduct));
-
-// STEP 8 — Seed usuarios with randomUser()
 await Promise.all(
-    [...uniqueLogins].map((login) => {
-        const user = randomUser();
-        return createUser({ ...user, login }); // override login to match
+    Array.from({ length: NUM_BRANDS }).map(async () => {
+        const user = random.user({ role: "brand" });
+        const brand = random.brandProfile({ userId: user.id });
+
+        await createUser(user);
+        await createBrand(brand);
+
+        const userProducts = Array.from({ length: PRODUCTS_PER_BRAND }, () =>
+            random.product({
+                brandId: brand.id,
+                categoryId: chance.pickone(categories).id,
+            })
+        );
+
+        await Promise.all(userProducts.map(createProduct));
+        products.push(...userProducts);
+
+        brandUsers.push({ user, brand, products: userProducts });
+
+        return user;
     })
 );
 
-console.log("🌱 Seed complete — produtos, marcas, and usuarios are in KV");
+// 3. Seed customers + orders + cart + wishlist
+await Promise.all(
+    Array.from({ length: NUM_CUSTOMERS }).map(async () => {
+        const user = random.user({ role: "customer" });
+        const profile = random.customerProfile({ userId: user.id });
+        const address = random.address({ userId: user.id });
+        const payment = random.paymentMethod({ userId: user.id });
+
+        await createUser(user);
+        await createCustomer(profile);
+        await createAddress(address);
+        await createPaymentMethod(payment);
+
+        const order = random.order({
+            userId: user.id,
+            productPool: products.map(({ id, price }) => ({ id, price })),
+            addressId: address.id,
+            paymentMethodId: payment.id,
+        });
+
+        await createOrder(order);
+
+        const cartItems: CartItem[] = chance
+            .pickset(products, 3)
+            .map((p: Product) => random.cartItem(p.id));
+        await setCart(user.id, cartItems);
+
+        const wishlistItems: WishlistItem[] = chance
+            .pickset(products, 3)
+            .map((p: Product) => random.wishlistItem(p.id));
+        await setWishlist(user.id, wishlistItems);
+
+        await setWishlist(user.id, wishlistItems);
+
+        return user;
+    })
+);
+
+console.log("🌱 Seed complete: brands, products, customers, orders, and extras are in KV");
