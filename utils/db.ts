@@ -38,63 +38,286 @@ export async function collectValues<T>(iter: Deno.KvListIterator<T>) {
   return await Array.fromAsync(iter, ({ value }) => value);
 }
 
-// Product
+// identity, authentication, and permissions
+
+type UserRole = 'brand' | 'admin' | 'customer';
+
+export interface User {
+  id: string; // ULID or UUID
+  login: string;
+  email: string;
+  passwordHash: string; // tbd hash encryption
+  role: UserRole;
+  createdAt: string; // ISO timestamp
+}
+
+type ProfileStatus = 'active' | 'pending' | 'inactive';
+
+// public-facing display layer
+export interface BrandProfile {
+  id: string;           // ULID (separate from User.id)
+  userId: string;       // Foreign Key to User.id
+  title: string;        // Public display name
+  slug: string;         // URL-friendly slug, unique per brand e.g. sim-sukeban
+  bio?: string;
+  website?: string;
+  logoUrl?: string;
+  createdAt: string;    // ISO timestamp
+  status: ProfileStatus;
+}
+
+export interface CustomerProfile {
+    id: string;           // ULID (separate from User.id)
+    userId: string;        // Foreign Key to User.id
+    displayName?: string;  // public or semi-public name
+    avatarUrl?: string;
+    preferences?: Record<string, unknown>; // themes, filters, etc.
+    createdAt: string;
+    status: ProfileStatus;
+    language?: string; // ISO 639-1 — e.g. "en", "ja"
+  }
+
+// product-related
 export interface Product {
   // Uses ULID
   id: string;
   brandId: string;
-  userLogin: string;
   title: string;
-  url: string;
-  score: number;
-  category: string;
-  createdAt: number;
-  image: string;
+  price: number; // price in BRL
+  images: string[];
+  categoryId: string;
+  createdAt: string; // ISO timestamp
+  inventory?: number; // null = infinite
+  isAvailable?: boolean; // to toggle visibility
 }
 
-export interface Brand {
-  // Uses ULID
+interface ProductCategory {
   id: string;
-  userLogin: string;
-  title: string;
-  url: string;
-  score: number;
-  bio?: string;
-  website?: string;
-  logoUrl?: string;
+  slug: string;
+  name: Record<string, string>; // { en: "Altwear", ja: "オルトウェア" }
 }
 
-/** For testing */
-export function randomProduct(): Product {
-  return {
-    id: ulid(),
-    brandId: ulid(),
-    userLogin: chance.twitter().replace("@", ""),
-    title: chance.sentence({ words: 3 }),
-    url: chance.url(),
-    score: chance.integer({ min: 0, max: 999 }),
-    category: chance.pickone(["tops", "bottoms", "footwear", "accessories", "other"]),
-    createdAt: Date.now(), // 🛠️ matches `number` type
-    image: chance.url(),
-  };
+export interface CartItem {
+  productId: string;
+  quantity: number;
+  addedAt: string; // ISO timestamp
 }
 
-export function randomBrand(): Brand {
-  return {
-    id: ulid(),
-    userLogin: chance.twitter().replace("@", ""),
-    title: chance.company(),
-    url: chance.url(),
-    score: chance.integer({ min: 0, max: 999 }),
-    bio: chance.sentence({ words: 8 }),
-    website: chance.url(),
-    logoUrl: chance.url(),
-  };
+export interface WishlistItem {
+  productId: string;
+  addedAt: string; // ISO timestamp
 }
+
+// Order
+
+type OrderStatus = 'pending' | 'paid' | 'shipped' | 'cancelled' | 'delivered';
+type OrderItem = { productId: string; quantity: number };
+
+export interface Order {
+  id: string;
+  userId: string;
+  items: OrderItem[];
+  total: number;
+  placedAt: string;
+  status: OrderStatus;
+  shippingAddressId: string;
+  paymentMethodId: string;
+}
+
+export interface Address {
+  id: string; // ULID or UUID
+  userId: string;
+  name: string;
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  phone?: string;
+}
+
+export interface PaymentMethod {
+  id: string; // reference to Stripe setup ID or similar
+  userId: string;
+  provider: 'stripe';
+  label: string; // e.g., "Visa ending in 4242"
+  lastUsedAt?: string;
+  isDefault: boolean;
+}
+/**
+ * Random data generators for testing & seeding.
+ *
+ * Collapse this whole block in your editor for meowmeow :3.
+ */
+export const random = {
+  product(params: { brandId: string; categoryId: string }): Product {
+    return {
+      id: ulid(),
+      brandId: params.brandId,
+      categoryId: params.categoryId,
+      title: `${chance.word({ length: 4 })} ${chance.animal()}`,
+      price: chance.integer({ min: 5000, max: 25000 }),
+      images: [chance.url({ domain: "cdn.example.com" })],
+      createdAt: new Date().toISOString(),
+      inventory: chance.integer({ min: 0, max: 100 }),
+      isAvailable: chance.bool({ likelihood: 90 }),
+    };
+  },
+
+  productCategory(): ProductCategory {
+    const nameEn = chance.word({ length: 6 });
+    const nameJa = "カテゴリ";
+    const slug = nameEn.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+    return {
+      id: ulid(),
+      slug,
+      name: {
+        en: nameEn.charAt(0).toUpperCase() + nameEn.slice(1),
+        ja: nameJa,
+      },
+    };
+  },
+
+  cartItem(productId: string): CartItem {
+    return {
+      productId,
+      quantity: chance.integer({ min: 1, max: 4 }),
+      addedAt: new Date().toISOString(),
+    };
+  },
+
+  wishlistItem(productId: string): WishlistItem {
+    return {
+      productId,
+      addedAt: new Date().toISOString(),
+    };
+  },
+
+  brandProfile(params: { userId: string }): BrandProfile {
+    const company = chance.company();
+    const slug = company.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+
+    return {
+      id: ulid(),
+      userId: params.userId,
+      title: company,
+      slug,
+      bio: chance.sentence({ words: 10 }),
+      website: chance.url(),
+      logoUrl: `https://cdn.example.com/logos/${slug}.png`,
+      createdAt: new Date().toISOString(),
+      status: chance.pickone<ProfileStatus>(["active", "pending", "inactive"]),
+    };
+  },
+
+  customerProfile(params: { userId: string }): CustomerProfile {
+    return {
+      id: ulid(),
+      userId: params.userId,
+      displayName: `${chance.first()} ${chance.last()}`,
+      avatarUrl: chance.avatar(),
+      preferences: {
+        theme: chance.pickone(["light", "dark", "void"]),
+        showNSFW: chance.bool({ likelihood: 20 }),
+      },
+      createdAt: new Date().toISOString(),
+      status: chance.pickone<ProfileStatus>(["active", "pending", "inactive"]),
+      language: chance.pickone(["en", "ja", "pt", "es", "fr"]),
+    };
+  },
+
+  user(overrides: Partial<User> = {}): User {
+    const role = overrides.role ?? chance.pickone<UserRole>(["brand", "customer", "admin"]);
+    const login = overrides.login ?? chance.twitter().replace("@", "").toLowerCase();
+    const email = overrides.email ?? `${login}@${chance.domain()}`;
+
+    return {
+      id: ulid(),
+      login,
+      email,
+      role,
+      passwordHash: "fake$2b$10$" + chance.hash({ length: 40 }),
+      createdAt: new Date().toISOString(),
+      ...overrides,
+    };
+  },
+
+  address(params: { userId: string }): Address {
+    return {
+      id: ulid(),
+      userId: params.userId,
+      name: `${chance.first()} ${chance.last()}`,
+      street: chance.address(),
+      city: chance.city(),
+      state: chance.state(),
+      zip: chance.zip(),
+      country: chance.country({ full: false }),
+      phone: chance.phone(),
+    };
+  },
+
+  paymentMethod(params: { userId: string }): PaymentMethod {
+    const last4 = chance.cc({ type: "Visa" }).slice(-4);
+    return {
+      id: ulid(),
+      userId: params.userId,
+      provider: "stripe",
+      label: `Visa ending in ${last4}`,
+      lastUsedAt: new Date().toISOString(),
+      isDefault: chance.bool({ likelihood: 80 }),
+    };
+  },
+
+  order(params: {
+    userId: string;
+    productPool: Array<Pick<Product, "id" | "price">>;
+    addressId: string;
+    paymentMethodId: string;
+  }): Order {
+    const numItems = chance.integer({ min: 1, max: 5 });
+
+    const selectedProducts = chance.pickset(
+        params.productPool,
+        numItems
+    ) as Array<Pick<Product, "id" | "price">>;
+
+    const items: OrderItem[] = selectedProducts.map((product) => ({
+      productId: product.id,
+      quantity: chance.integer({ min: 1, max: 3 }),
+    }));
+
+    const total = items.reduce((acc, item) => {
+      const price = params.productPool.find((p) => p.id === item.productId)?.price ?? 0;
+      return acc + price * item.quantity;
+    }, 0);
+
+    return {
+      id: ulid(),
+      userId: params.userId,
+      items,
+      total,
+      placedAt: new Date().toISOString(),
+      status: chance.pickone<OrderStatus>([
+        "pending",
+        "paid",
+        "shipped",
+        "cancelled",
+        "delivered",
+      ]),
+      shippingAddressId: params.addressId,
+      paymentMethodId: params.paymentMethodId,
+    };
+  },
+};
 
 /**
- * Creates a new product in the database. Throws if the product already exists in
- * one of the indexes.
+ * Creates a new product in the database, indexing it by both product ID
+ * and the brand that owns it. Fails if the product already exists under
+ * either index.
+ *
+ * This operation is atomic. If a product with the same ID or
+ * (brandId + productId) already exists, it will not be overwritten.
  *
  * @example
  * ```ts
@@ -103,33 +326,37 @@ export function randomBrand(): Brand {
  *
  * await createProduct({
  *   id: ulid(),
- *   userLogin: "john_doe",
- *   title: "example-title",
- *   url: "https://example.com",
- *   score: 0,
+ *   brandId: "brand_01HXYZ...",
+ *   title: "Cybercore Harness",
+ *   price: 18900, // in BRL cents
+ *   images: ["https://cdn.example.com/products/harness.jpg"],
+ *   categoryId: "cat_01HX...",
+ *   createdAt: new Date().toISOString(),
+ *   inventory: 12,
+ *   isAvailable: true,
  * });
  * ```
  */
 export async function createProduct(product: Product) {
-  const productsKey = ["products", product.id];
-  const productsByUserKey = ["products_by_user", product.userLogin, product.id];
+  const productKey = ["product", product.id];
+  const productByBrandKey = ["product_by_brand", product.brandId, product.id];
 
   const res = await kv.atomic()
-    .check({ key: productsKey, versionstamp: null })
-    .check({ key: productsByUserKey, versionstamp: null })
-    .set(productsKey, product)
-    .set(productsByUserKey, product)
-    .commit();
+      .check({ key: productKey, versionstamp: null })
+      .check({ key: productByBrandKey, versionstamp: null })
+      .set(productKey, product)
+      .set(productByBrandKey, product)
+      .commit();
 
   if (!res.ok) {
     console.error("❌ Failed to create product:", product.id);
 
     const existing = await Promise.all([
-      kv.get(productsKey),
-      kv.get(productsByUserKey),
+      kv.get(productKey),
+      kv.get(productByBrandKey),
     ]);
-    console.log("🔍 Existing productsKey?", existing[0].value);
-    console.log("🔍 Existing productsByUserKey?", existing[1].value);
+    console.log("🔍 Existing product?", existing[0].value);
+    console.log("🔍 Existing product_by_brand?", existing[1].value);
 
     throw new Error("Failed to create product");
   }
@@ -138,48 +365,77 @@ export async function createProduct(product: Product) {
 }
 
 /**
- * Creates a new product in the database. Throws if the product already exists in
- * one of the indexes.
+ * Updates an existing product in the database.
+ * This will overwrite the product at both:
+ * - `["product", product.id]`
+ * - `["product_by_brand", product.brandId, product.id]`
+ *
+ * This operation is atomic and ensures consistency across both primary
+ * and secondary indexes.
  *
  * @example
  * ```ts
- * import { createBrand } from "@/utils/db.ts";
- * import { ulid } from "$std/ulid/mod.ts";
+ * import { updateProduct } from "@/utils/db.ts";
  *
- * await createBrand({
- *   id: ulid(),
- *   userLogin: "john_doe",
- *   title: "example-title",
- *   url: "https://example.com",
- *   score: 0,
+ * await updateProduct({
+ *   id: "prod_01HX...",
+ *   brandId: "brand_01HX...",
+ *   title: "Updated Title",
+ *   price: 19900,
+ *   images: ["https://cdn.example.com/products/new.jpg"],
+ *   categoryId: "cat_01HX...",
+ *   createdAt: "2025-04-01T12:00:00Z",
+ *   inventory: 30,
+ *   isAvailable: true,
  * });
  * ```
+ *
+ * @param product - The full product object to overwrite in both indexes.
+ * @throws If the atomic update operation fails.
  */
-export async function createBrand(brand: Brand) {
-  const brandsKey = ["brands", brand.id];
-  const brandsByUserKey = ["brands_by_user", brand.userLogin, brand.id];
+export async function updateProduct(product: Product): Promise<void> {
+  const productKey = ["product", product.id];
+  const byBrandKey = ["product_by_brand", product.brandId, product.id];
 
   const res = await kv.atomic()
-      .check({ key: brandsKey, versionstamp: null })
-      .check({ key: brandsByUserKey, versionstamp: null })
-      .set(brandsKey, brand)
-      .set(brandsByUserKey, brand)
+      .set(productKey, product)
+      .set(byBrandKey, product)
       .commit();
 
   if (!res.ok) {
-    console.error("❌ Failed to create brand:", brand.id);
-
-    const existing = await Promise.all([
-      kv.get(brandsKey),
-      kv.get(brandsByUserKey),
-    ]);
-    console.log("🔍 Existing brandsKey?", existing[0].value);
-    console.log("🔍 Existing brandsByUserKey?", existing[1].value);
-
-    throw new Error("Failed to create product");
+    console.error("❌ Failed to update product:", product.id);
+    throw new Error("Failed to update product");
   }
 
-  console.log("✅ Brand created:", brand.id);
+  console.log("✅ Product updated:", product.id);
+}
+
+/**
+ * Deletes a product from the database using its ID and brand ID.
+ * This operation is atomic and removes the product from both:
+ * - `["product", id]`
+ * - `["product_by_brand", brandId, id]`
+ *
+ * @example
+ * ```ts
+ * import { deleteProduct } from "@/utils/db.ts";
+ *
+ * await deleteProduct("prod_01HX...", "brand_01HX...");
+ * ```
+ *
+ * @param id - The ID of the product to delete.
+ * @param brandId - The brand ID associated with the product, used for reverse index cleanup.
+ * @throws If the atomic delete operation fails.
+ */
+export async function deleteProduct(id: string, brandId: string): Promise<void> {
+  const productKey = ["product", id];
+  const byBrandKey = ["product_by_brand", brandId, id];
+  const res = await kv.atomic()
+      .delete(productKey)
+      .delete(byBrandKey)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to delete product");
 }
 
 /**
@@ -187,88 +443,289 @@ export async function createBrand(brand: Brand) {
  *
  * @example
  * ```ts
- * import { getBrand } from "@/utils/db.ts";
+ * import { getProduct } from "@/utils/db.ts";
  *
- * const brand = await getItem("01H9YD2RVCYTBVJEYEJEV5D1S1");
- * brand?.id; // Returns "01H9YD2RVCYTBVJEYEJEV5D1S1";
- * brand?.userLogin; // Returns "snoop"
- * brand?.title; // Returns "example-title"
- * brand?.url; // Returns "http://example.com"
- * brand?.score; // Returns 420
+ * const product = await getProduct("01H9YD2RVCYTBVJEYEJEV5D1S1");
+ * product?.id;         // → "01H9YD2RVCYTBVJEYEJEV5D1S1"
+ * product?.title;      // → "Cybercore Harness"
+ * product?.brandId;    // → "brand_01HX..."
+ * product?.price;      // → 18900
+ * product?.categoryId; // → "cat_01HX..."
  * ```
  */
-export async function getBrand(id: string) {
-  const res = await kv.get<Brand>(["brands", id]);
+export async function getProduct(id: string): Promise<Product | null> {
+  const res = await kv.get<Product>(["product", id]);
   return res.value;
 }
 
 /**
- * Returns a {@linkcode Deno.KvListIterator} which can be used to iterate over
- * the produtos in the database, in chronological order.
+ * Creates a new product category in the database.
+ * The category is stored at the key: `["product_category", categoryId]`.
+ *
+ * This operation is atomic and will fail if a category with the same ID already exists.
  *
  * @example
  * ```ts
- * import { listBrands } from "@/utils/db.ts";
- *
- * for await (const entry of listBrands()) {
- *   entry.value.id; // Returns "01H9YD2RVCYTBVJEYEJEV5D1S1"
- *   entry.value.userLogin; // Returns "pedro"
- *   entry.key; // Returns ["items_voted_by_user", "01H9YD2RVCYTBVJEYEJEV5D1S1", "pedro"]
- *   entry.versionstamp; // Returns "00000000000000010000"
- * }
+ * await createProductCategory({
+ *   id: "cat_01HX...",
+ *   slug: "altwear",
+ *   name: {
+ *     en: "Altwear",
+ *     ja: "オルトウェア"
+ *   }
+ * });
  * ```
+ *
+ * @param category - The full `ProductCategory` object to insert.
+ * @throws If the category already exists or the atomic operation fails.
  */
-export async function listBrands(options?: Deno.KvListOptions): Promise<Brand[]> {
-  const iter = kv.list<Brand>({ prefix: ["brands"] }, options);
-  const brands: Brand[] = [];
-  for await (const entry of iter) {
-    brands.push(entry.value);
+export async function createProductCategory(category: ProductCategory): Promise<void> {
+  const key = ["product_category", category.id];
+  const res = await kv.atomic()
+      .check({ key, versionstamp: null })
+      .set(key, category)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to create product category");
+}
+
+/**
+ * Updates an existing product category in the database.
+ * This will overwrite the category stored at `["product_category", categoryId]`.
+ *
+ * @example
+ * ```ts
+ * await updateProductCategory({
+ *   id: "cat_01HX...",
+ *   slug: "altwear",
+ *   name: {
+ *     en: "Updated Altwear",
+ *     ja: "オルトウェア"
+ *   }
+ * });
+ * ```
+ *
+ * @param category - The full `ProductCategory` object to update.
+ * @throws If the atomic update operation fails.
+ */
+export async function updateProductCategory(category: ProductCategory): Promise<void> {
+  const key = ["product_category", category.id];
+  const res = await kv.atomic().set(key, category).commit();
+  if (!res.ok) throw new Error("Failed to update product category");
+}
+
+/**
+ * Deletes a product category from the database.
+ * Removes the category stored at `["product_category", categoryId]`.
+ *
+ * @example
+ * ```ts
+ * await deleteProductCategory("cat_01HX...");
+ * ```
+ *
+ * @param id - The ID of the product category to delete.
+ * @throws If the deletion operation fails.
+ */
+export async function deleteProductCategory(id: string): Promise<void> {
+  await kv.delete(["product_category", id]);
+}
+
+/**
+ * Retrieves a product category from the database by its ID.
+ * Looks up the category stored at `["product_category", categoryId]`.
+ *
+ * @example
+ * ```ts
+ * const category = await getProductCategory("cat_01HX...");
+ * console.log(category?.name.en); // → "Altwear"
+ * ```
+ *
+ * @param id - The ID of the product category to fetch.
+ * @returns The `ProductCategory` object, or `null` if not found.
+ */
+export async function getProductCategory(id: string): Promise<ProductCategory | null> {
+  const res = await kv.get<ProductCategory>(["product_category", id]);
+  return res.value;
+}
+
+/**
+ * Replaces the entire shopping cart for the specified user.
+ * Overwrites the cart stored at `["cart", userId]` with a new list of items.
+ *
+ * This is a full replacement — not a partial or additive update.
+ *
+ * @example
+ * ```ts
+ * await setCart("user_01HX...", [
+ *   { productId: "prod_01HX...", quantity: 2, addedAt: new Date().toISOString() },
+ *   { productId: "prod_01HZ...", quantity: 1, addedAt: new Date().toISOString() },
+ * ]);
+ * ```
+ *
+ * @param userId - The ID of the user whose cart is being replaced.
+ * @param items - An array of `CartItem` objects to store.
+ */
+export async function setCart(userId: string, items: CartItem[]): Promise<void> {
+  await kv.set(["cart", userId], items);
+}
+
+/**
+ * Adds a product to the user's shopping cart.
+ * If the product is already in the cart, it increments the quantity.
+ * If not, it adds a new `CartItem` with quantity = 1.
+ *
+ * Internally reads from and updates the cart stored at `["cart", userId]`.
+ *
+ * @example
+ * ```ts
+ * await addToCart("user_01HX...", "prod_01ABC...");
+ * ```
+ *
+ * @param userId - The ID of the user.
+ * @param productId - The product to add to the cart.
+ * @param quantity - (Optional) Quantity to add. Defaults to 1.
+ */
+export async function addToCart(
+    userId: string,
+    productId: string,
+    quantity: number = 1,
+): Promise<void> {
+  const cartKey = ["cart", userId];
+  const res = await kv.get<CartItem[]>(cartKey);
+  const existingCart = res.value ?? [];
+
+  const updatedCart = [...existingCart];
+  const existingIndex = updatedCart.findIndex((item) => item.productId === productId);
+
+  if (existingIndex >= 0) {
+    updatedCart[existingIndex].quantity += quantity;
+  } else {
+    updatedCart.push({
+      productId,
+      quantity,
+      addedAt: new Date().toISOString(),
+    });
   }
-  return brands;
+
+  await kv.set(cartKey, updatedCart);
 }
 
 /**
- * Returns a {@linkcode Deno.KvListIterator} which can be used to iterate over
- * the produtos by a given user in the database, in chronological order.
+ * Removes a product from the user's shopping cart.
+ * If the product is not in the cart, this is a no-op.
+ *
+ * Internally reads from and updates the cart stored at `["cart", userId]`.
  *
  * @example
  * ```ts
- * import { listBrandsByUser } from "@/utils/db.ts";
- *
- * for await (const entry of listBrandsByUser("pedro")) {
- *   entry.value.id; // Returns "01H9YD2RVCYTBVJEYEJEV5D1S1"
- *   entry.value.userLogin; // Returns "pedro"
- *   entry.key; // Returns ["items_voted_by_user", "01H9YD2RVCYTBVJEYEJEV5D1S1", "pedro"]
- *   entry.versionstamp; // Returns "00000000000000010000"
- * }
+ * await removeFromCart("user_01HX...", "prod_01ABC...");
  * ```
+ *
+ * @param userId - The ID of the user.
+ * @param productId - The product to remove from the cart.
  */
-export function listBrandsByUser(
-    userLogin: string,
-    options?: Deno.KvListOptions,
-) {
-  return kv.list<Brand>({ prefix: ["brands_by_user", userLogin] }, options);
+export async function removeFromCart(
+    userId: string,
+    productId: string,
+): Promise<void> {
+  const cartKey = ["cart", userId];
+  const res = await kv.get<CartItem[]>(cartKey);
+  const existingCart = res.value ?? [];
+
+  const updatedCart = existingCart.filter((item) => item.productId !== productId);
+
+  await kv.set(cartKey, updatedCart);
 }
 
-
 /**
- * Gets the product with the given ID from the database.
+ * Retrieves the full cart for the specified user.
+ * Reads from the key `["cart", userId]`.
+ *
+ * If the cart does not exist, an empty array is returned.
  *
  * @example
  * ```ts
- * import { getItem } from "@/utils/db.ts";
- *
- * const product = await getItem("01H9YD2RVCYTBVJEYEJEV5D1S1");
- * product?.id; // Returns "01H9YD2RVCYTBVJEYEJEV5D1S1";
- * product?.userLogin; // Returns "snoop"
- * product?.title; // Returns "example-title"
- * product?.url; // Returns "http://example.com"
- * product?.score; // Returns 420
+ * const cart = await getCart("user_01HX...");
+ * console.log(cart.length); // → 2
  * ```
+ *
+ * @param userId - The ID of the user whose cart is being fetched.
+ * @returns An array of `CartItem` objects, or an empty array if no cart exists.
  */
-export async function getProduct(id: string) {
-  const res = await kv.get<Product>(["products", id]);
-  return res.value;
+export async function getCart(userId: string): Promise<CartItem[]> {
+  const res = await kv.get<CartItem[]>(["cart", userId]);
+  return res.value ?? [];
+}
+
+/**
+ * Deletes the entire shopping cart for the specified user.
+ * Removes the cart stored at `["cart", userId]`.
+ *
+ * @example
+ * ```ts
+ * await clearCart("user_01HX...");
+ * ```
+ *
+ * @param userId - The ID of the user whose cart should be cleared.
+ */
+export async function clearCart(userId: string): Promise<void> {
+  await kv.delete(["cart", userId]);
+}
+
+/**
+ * Replaces the entire wishlist for the specified user.
+ * Overwrites the wishlist stored at `["wishlist", userId]` with the provided items.
+ *
+ * This is a full replacement — existing entries are discarded.
+ *
+ * @example
+ * ```ts
+ * await setWishlist("user_01HX...", [
+ *   { productId: "prod_01HX...", addedAt: new Date().toISOString() },
+ *   { productId: "prod_01HZ...", addedAt: new Date().toISOString() },
+ * ]);
+ * ```
+ *
+ * @param userId - The ID of the user whose wishlist is being set.
+ * @param items - An array of `WishlistItem` objects to store.
+ */
+export async function setWishlist(userId: string, items: WishlistItem[]): Promise<void> {
+  await kv.set(["wishlist", userId], items);
+}
+
+/**
+ * Retrieves the entire wishlist for the specified user.
+ * Reads from the key `["wishlist", userId]`.
+ *
+ * If the wishlist does not exist, an empty array is returned.
+ *
+ * @example
+ * ```ts
+ * const wishlist = await getWishlist("user_01HX...");
+ * console.log(wishlist.length); // → 2
+ * ```
+ *
+ * @param userId - The ID of the user whose wishlist is being fetched.
+ * @returns An array of `WishlistItem` objects, or an empty array if none exist.
+ */
+export async function getWishlist(userId: string): Promise<WishlistItem[]> {
+  const res = await kv.get<WishlistItem[]>(["wishlist", userId]);
+  return res.value ?? [];
+}
+
+/**
+ * Clears the entire wishlist for the specified user.
+ * Deletes the key at `["wishlist", userId]`.
+ *
+ * @example
+ * ```ts
+ * await clearWishlist("user_01HX...");
+ * ```
+ *
+ * @param userId - The ID of the user whose wishlist should be cleared.
+ */
+export async function clearWishlist(userId: string): Promise<void> {
+  await kv.delete(["wishlist", userId]);
 }
 
 /**
@@ -297,6 +754,406 @@ export async function listProducts(options?: Deno.KvListOptions): Promise<Produc
 }
 
 /**
+ * Creates a new order under a user's order list.
+ *
+ * @example
+ * ```ts
+ * await createOrder(order);
+ * ```
+ */
+export async function createOrder(order: Order): Promise<void> {
+  const key = ["order", order.userId, order.id];
+
+  const res = await kv.atomic()
+      .check({ key, versionstamp: null })
+      .set(key, order)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to create order");
+}
+
+/**
+ * Updates an existing order.
+ */
+export async function updateOrder(order: Order): Promise<void> {
+  const key = ["order", order.userId, order.id];
+
+  const res = await kv.atomic()
+      .set(key, order)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to update order");
+}
+
+/**
+ * Deletes an order.
+ */
+export async function deleteOrder(userId: string, orderId: string): Promise<void> {
+  const key = ["order", userId, orderId];
+  await kv.delete(key);
+}
+
+/**
+ * Creates a new address entry in the database for the given user.
+ * The address is stored at the key: `["address", userId, addressId]`.
+ *
+ * This operation is atomic and fails if the address already exists.
+ *
+ * @example
+ * ```ts
+ * await createAddress({
+ *   id: "addr_01HX...",
+ *   userId: "user_01HX...",
+ *   name: "Jane Doe",
+ *   street: "123 Alt Street",
+ *   city: "Neo Tokyo",
+ *   state: "CA",
+ *   zip: "94107",
+ *   country: "JP",
+ *   phone: "+81-80-1234-5678",
+ * });
+ * ```
+ *
+ * @param address - The full `Address` object to create.
+ * @throws If the address already exists or the atomic operation fails.
+ */
+export async function createAddress(address: Address): Promise<void> {
+  const key = ["address", address.userId, address.id];
+
+  const res = await kv.atomic()
+      .check({ key, versionstamp: null })
+      .set(key, address)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to create address");
+}
+
+/**
+ * Updates an existing address entry in the database.
+ * This operation overwrites the entire address at:
+ * `["address", userId, addressId]`.
+ *
+ * @example
+ * ```ts
+ * await updateAddress({
+ *   id: "addr_01HX...",
+ *   userId: "user_01HX...",
+ *   name: "Jane Doe",
+ *   street: "456 Post-Cyber Street",
+ *   city: "New Kyoto",
+ *   state: "CA",
+ *   zip: "94016",
+ *   country: "JP",
+ * });
+ * ```
+ *
+ * @param address - The full `Address` object to update.
+ * @throws If the atomic update operation fails.
+ */
+export async function updateAddress(address: Address): Promise<void> {
+  const key = ["address", address.userId, address.id];
+
+  const res = await kv.atomic()
+      .set(key, address)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to update address");
+}
+
+/**
+ * Deletes a user's address by its ID.
+ * Removes the entry at `["address", userId, addressId]`.
+ *
+ * @example
+ * ```ts
+ * await deleteAddress("user_01HX...", "addr_01HX...");
+ * ```
+ *
+ * @param userId - The ID of the user who owns the address.
+ * @param addressId - The ID of the address to delete.
+ * @throws If deletion fails.
+ */
+export async function deleteAddress(userId: string, addressId: string): Promise<void> {
+  await kv.delete(["address", userId, addressId]);
+}
+
+/**
+ * Creates a new payment method entry for the given user.
+ * The method is stored at the key: `["payment_method", userId, methodId]`.
+ *
+ * This operation is atomic and will fail if the payment method already exists.
+ *
+ * @example
+ * ```ts
+ * await createPaymentMethod({
+ *   id: "pm_01HX...",
+ *   userId: "user_01HX...",
+ *   provider: "stripe",
+ *   label: "Visa ending in 4242",
+ *   lastUsedAt: new Date().toISOString(),
+ *   isDefault: true,
+ * });
+ * ```
+ *
+ * @param method - The full `PaymentMethod` object to create.
+ * @throws If the method already exists or the atomic operation fails.
+ */
+export async function createPaymentMethod(method: PaymentMethod): Promise<void> {
+  const key = ["payment_method", method.userId, method.id];
+
+  const res = await kv.atomic()
+      .check({ key, versionstamp: null })
+      .set(key, method)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to create payment method");
+}
+
+/**
+ * Updates an existing payment method entry in the database.
+ * This will overwrite the method at:
+ * `["payment_method", userId, methodId]`.
+ *
+ * @example
+ * ```ts
+ * await updatePaymentMethod({
+ *   id: "pm_01HX...",
+ *   userId: "user_01HX...",
+ *   provider: "stripe",
+ *   label: "Visa ending in 4242",
+ *   isDefault: false,
+ * });
+ * ```
+ *
+ * @param method - The full `PaymentMethod` object to update.
+ * @throws If the atomic update operation fails.
+ */
+export async function updatePaymentMethod(method: PaymentMethod): Promise<void> {
+  const key = ["payment_method", method.userId, method.id];
+
+  const res = await kv.atomic()
+      .set(key, method)
+      .commit();
+
+  if (!res.ok) throw new Error("Failed to update payment method");
+}
+
+/**
+ * Deletes a payment method entry by user ID and method ID.
+ * Removes the entry at `["payment_method", userId, methodId]`.
+ *
+ * @example
+ * ```ts
+ * await deletePaymentMethod("user_01HX...", "pm_01HX...");
+ * ```
+ *
+ * @param userId - The ID of the user who owns the payment method.
+ * @param methodId - The ID of the payment method to delete.
+ * @throws If the deletion fails.
+ */
+export async function deletePaymentMethod(userId: string, methodId: string): Promise<void> {
+  await kv.delete(["payment_method", userId, methodId]);
+}
+
+/**
+ * Creates a new brand profile in the database, indexed by both brand ID
+ * and user ID. Throws if the brand already exists in either index.
+ *
+ * This operation is atomic. If a brand with the same ID or
+ * (userId + brandId) already exists, it will not be overwritten.
+ *
+ * @example
+ * ```ts
+ * import { createBrand } from "@/utils/db.ts";
+ * import { ulid } from "$std/ulid/mod.ts";
+ *
+ * await createBrand({
+ *   id: ulid(),
+ *   userId: "user_01HX...",
+ *   title: "Sim Sukeban",
+ *   slug: "sim-sukeban",
+ *   bio: "Post-dystopian luxury at discount prices",
+ *   website: "https://sukeban.net",
+ *   logoUrl: "https://cdn.example.com/logos/sim.png",
+ *   createdAt: new Date().toISOString(),
+ *   status: "active",
+ * });
+ * ```
+ */
+export async function createBrand(brand: BrandProfile) {
+  const brandKey = ["brand", brand.id];
+  const brandByUserKey = ["brand_by_user", brand.userId, brand.id];
+
+  const res = await kv.atomic()
+      .check({ key: brandKey, versionstamp: null })
+      .check({ key: brandByUserKey, versionstamp: null })
+      .set(brandKey, brand)
+      .set(brandByUserKey, brand)
+      .commit();
+
+  if (!res.ok) {
+    console.error("❌ Failed to create brand:", brand.id);
+
+    const existing = await Promise.all([
+      kv.get(brandKey),
+      kv.get(brandByUserKey),
+    ]);
+    console.log("🔍 Existing brand?", existing[0].value);
+    console.log("🔍 Existing brand_by_user?", existing[1].value);
+
+    throw new Error("Failed to create brand");
+  }
+
+  console.log("✅ Brand created:", brand.id);
+}
+
+/**
+ * Updates an existing brand profile in the database.
+ * This operation is atomic and will overwrite both:
+ * - `["brand", brandId]`
+ * - `["brand_by_user", userId, brandId]`
+ *
+ * If the brand does not exist, this will create it.
+ * Use `createBrand()` if you want to enforce uniqueness instead.
+ *
+ * @example
+ * ```ts
+ * import { updateBrand } from "@/utils/db.ts";
+ *
+ * await updateBrand({
+ *   id: "brand_01HX...",
+ *   userId: "user_01HX...",
+ *   title: "Sim Sukeban Updated",
+ *   slug: "sim-sukeban",
+ *   bio: "New aesthetic, same attitude.",
+ *   website: "https://sukeban.net",
+ *   logoUrl: "https://cdn.example.com/logos/sim.png",
+ *   createdAt: "2025-04-01T00:00:00Z",
+ *   status: "active",
+ * });
+ * ```
+ *
+ * @param brand - The full BrandProfile object to overwrite.
+ * @throws If the atomic update operation fails.
+ */
+export async function updateBrand(brand: BrandProfile): Promise<void> {
+  const brandKey = ["brand", brand.id];
+  const brandByUserKey = ["brand_by_user", brand.userId, brand.id];
+
+  const res = await kv.atomic()
+      .set(brandKey, brand)
+      .set(brandByUserKey, brand)
+      .commit();
+
+  if (!res.ok) {
+    console.error("❌ Failed to update brand:", brand.id);
+    throw new Error("Failed to update brand");
+  }
+
+  console.log("✅ Brand updated:", brand.id);
+}
+
+/**
+ * Deletes a brand profile from the database using its ID and associated user ID.
+ * This operation is atomic and removes the brand from both:
+ * - `["brand", brandId]`
+ * - `["brand_by_user", userId, brandId]`
+ *
+ * @example
+ * ```ts
+ * import { deleteBrand } from "@/utils/db.ts";
+ *
+ * await deleteBrand("brand_01HX...", "user_01HX...");
+ * ```
+ *
+ * @param brandId - The unique ID of the brand to delete.
+ * @param userId - The ID of the user who owns the brand, used for secondary index cleanup.
+ * @throws If the atomic delete operation fails.
+ */
+export async function deleteBrand(brandId: string, userId: string): Promise<void> {
+  const brandKey = ["brand", brandId];
+  const brandByUserKey = ["brand_by_user", userId, brandId];
+
+  const res = await kv.atomic()
+      .delete(brandKey)
+      .delete(brandByUserKey)
+      .commit();
+
+  if (!res.ok) {
+    console.error("❌ Failed to delete brand:", brandId);
+    throw new Error("Failed to delete brand");
+  }
+
+  console.log("✅ Brand deleted:", brandId);
+}
+
+/**
+ * Gets the brand profile with the given ID from the database.
+ *
+ * @example
+ * ```ts
+ * import { getBrand } from "@/utils/db.ts";
+ *
+ * const brand = await getBrand("01H9YD2RVCYTBVJEYEJEV5D1S1");
+ * brand?.id;        // → "01H9YD2RVCYTBVJEYEJEV5D1S1"
+ * brand?.userId;    // → "user_01H..."
+ * brand?.title;     // → "Sim Sukeban"
+ * brand?.slug;      // → "sim-sukeban"
+ * brand?.website;   // → "https://sukeban.net"
+ * ```
+ */
+export async function getBrand(id: string): Promise<BrandProfile | null> {
+  const res = await kv.get<BrandProfile>(["brand", id]);
+  return res.value;
+}
+
+/**
+ * Returns all brand profiles in the database.
+ *
+ * @example
+ * ```ts
+ * import { listBrands } from "@/utils/db.ts";
+ *
+ * const brands = await listBrands();
+ * brands.forEach((brand) => {
+ *   brand.id;       // → "01H9YD2RVCYTBVJEYEJEV5D1S1"
+ *   brand.userId;   // → "user_01HX..."
+ *   brand.title;    // → "Sim Sukeban"
+ * });
+ * ```
+ */
+export async function listBrands(options?: Deno.KvListOptions): Promise<BrandProfile[]> {
+  const iter = kv.list<BrandProfile>({ prefix: ["brand"] }, options);
+  const brands: BrandProfile[] = [];
+  for await (const entry of iter) {
+    brands.push(entry.value);
+  }
+  return brands;
+}
+
+/**
+ * Returns an async iterator of brand profiles associated with a given user ID.
+ * This allows listing all brands owned by a specific user.
+ *
+ * @example
+ * ```ts
+ * import { listBrandsByUser } from "@/utils/db.ts";
+ *
+ * for await (const entry of listBrandsByUser("user_01HX...")) {
+ *   entry.value.id;       // → "01H9YD2RVCYTBVJEYEJEV5D1S1"
+ *   entry.value.userId;   // → "user_01HX..."
+ *   entry.value.slug;     // → "sim-sukeban"
+ * }
+ * ```
+ */
+export function listBrandsByUser(
+    userId: string,
+    options?: Deno.KvListOptions,
+) {
+  return kv.list<BrandProfile>({ prefix: ["brand_by_user", userId] }, options);
+}
+
+/**
  * Returns a {@linkcode Deno.KvListIterator} which can be used to iterate over
  * the produtos by a given user in the database, in chronological order.
  *
@@ -313,350 +1170,144 @@ export async function listProducts(options?: Deno.KvListOptions): Promise<Produc
  * ```
  */
 export function listProductsByBrand(
-  userLogin: string,
+  id: string,
   options?: Deno.KvListOptions,
 ) {
-  return kv.list<Product>({ prefix: ["products_by_brand", userLogin] }, options);
-}
-
-// Vote
-export interface Vote {
-  productId: string;
-  userLogin: string;
+  return kv.list<Product>({ prefix: ["products_by_brand", id] }, options);
 }
 
 /**
- * Creates a vote in the database. Throws if the given product or user doesn't
- * exist or the vote already exists. The product's score is incremented by 1.
- *
- * @example
- * ```ts
- * import { createVote } from "@/utils/db.ts";
- *
- * await createVote({
- *   itemId: "01H9YD2RVCYTBVJEYEJEV5D1S1",
- *   userLogin: "pedro",
- * });
- * ```
- */
-export async function createVote(vote: Vote) {
-  const productKey = ["products", vote.productId];
-  const userKey = ["users", vote.userLogin];
-  const [productRes, userRes] = await kv.getMany<[Product, User]>([productKey, userKey]);
-  const product = productRes.value;
-  const user = userRes.value;
-  if (product === null) throw new Deno.errors.NotFound("Product not found");
-  if (user === null) throw new Deno.errors.NotFound("User not found");
-
-  const productVotedByUserKey = [
-    "products_voted_by_user",
-    vote.userLogin,
-    vote.productId,
-  ];
-  const userVotedForProductKey = [
-    "users_voted_for_item",
-    vote.productId,
-    vote.userLogin,
-  ];
-  const productByUserKey = ["products_by_user", product.userLogin, product.id];
-
-  product.score++;
-
-  const res = await kv.atomic()
-    .check(productRes)
-    .check(userRes)
-    .check({ key: productVotedByUserKey, versionstamp: null })
-    .check({ key: userVotedForProductKey, versionstamp: null })
-    .set(productKey, product)
-    .set(productByUserKey, product)
-    .set(productVotedByUserKey, product)
-    .set(userVotedForProductKey, user)
-    .commit();
-
-  if (!res.ok) throw new Error("Failed to create vote");
-}
-
-/**
- * Returns a {@linkcode Deno.KvListIterator} which can be used to iterate over
- * the produtos voted by a given user in the database, in chronological order.
- *
- * @example
- * ```ts
- * import { listProductsVotedByUser } from "@/utils/db.ts";
- *
- * for await (const entry of listProductsVotedByUser("john")) {
- *   entry.value.id; // Returns "01H9YD2RVCYTBVJEYEJEV5D1S1"
- *   entry.value.userLogin; // Returns "pedro"
- *   entry.key; // Returns ["items_voted_by_user", "01H9YD2RVCYTBVJEYEJEV5D1S1", "pedro"]
- *   entry.versionstamp; // Returns "00000000000000010000"
- * }
- * ```
- */
-export function listProductsVotedByUser(userLogin: string) {
-  return kv.list<Product>({ prefix: ["products_voted_by_user", userLogin] });
-}
-
-// User
-export interface User {
-  // AKA username
-  login: string;
-  sessionId: string;
-  /**
-   * Whether the user is subscribed to the "Premium Plan".
-   * @default {false}
-   */
-  isSubscribed: boolean;
-  stripeCustomerId?: string;
-}
-
-/** For testing */
-export function randomUser(): User {
-  return {
-    login: crypto.randomUUID(),
-    sessionId: crypto.randomUUID(),
-    isSubscribed: false,
-    stripeCustomerId: crypto.randomUUID(),
-  };
-}
-
-/**
- * Creates a new user in the database. Throws if the user or user session
- * already exists.
+ * Creates a user in the database, indexed by user ID.
+ * Fails if a user with the same ID already exists.
  *
  * @example
  * ```ts
  * import { createUser } from "@/utils/db.ts";
+ * import { ulid } from "std/uuid/mod.ts";
  *
  * await createUser({
- *   login: "john",
- *   sessionId: crypto.randomUUID(),
- *   isSubscribed: false,
+ *   id: ulid(),
+ *   login: "jack",
+ *   email: "jack@example.com",
+ *   passwordHash: "fake$2b$10$abc...",
+ *   role: "brand",
+ *   createdAt: new Date().toISOString(),
  * });
  * ```
  */
-export async function createUser(user: User) {
-  const usersKey = ["usuarios", user.login];
-  const usersBySessionKey = ["users_by_session", user.sessionId];
+export async function createUser(user: User): Promise<void> {
+  const userKey = ["user", user.id];
 
-  const atomicOp = kv.atomic()
-    .check({ key: usersKey, versionstamp: null })
-    .check({ key: usersBySessionKey, versionstamp: null })
-    .set(usersKey, user)
-    .set(usersBySessionKey, user);
-
-  if (user.stripeCustomerId !== undefined) {
-    const usersByStripeCustomerKey = [
-      "users_by_stripe_customer",
-      user.stripeCustomerId,
-    ];
-    atomicOp
-      .check({ key: usersByStripeCustomerKey, versionstamp: null })
-      .set(usersByStripeCustomerKey, user);
-  }
-
-  const res = await atomicOp.commit();
-
-  console.error("Atomic op created for user:", user.login);
+  const res = await kv.atomic()
+      .check({ key: userKey, versionstamp: null })
+      .set(userKey, user)
+      .commit();
 
   if (!res.ok) {
-    try {
-      console.log("KV path:", Deno.realPathSync("dev-kv.sqlite3"));
-    } catch {
-      console.warn("KV file hasn't been created yet.");
-    }
-    console.error("Atomic op failed for user:", user.login);
+    console.error("❌ Failed to create user:", user.id);
     throw new Error("Failed to create user");
-  }}
+  }
+
+  console.log("✅ User created:", user.id);
+}
+
 
 /**
- * Creates a user in the database, overwriting any previous data.
+ * Updates an existing user in the database by ID.
+ * This will overwrite the existing data with the provided user object.
+ *
+ * If the user does not exist, this will silently insert it. Use `createUser`
+ * if you want to enforce uniqueness via `.check(...)`.
  *
  * @example
  * ```ts
  * import { updateUser } from "@/utils/db.ts";
  *
  * await updateUser({
- *   login: "john",
- *   sessionId: crypto.randomUUID(),
- *   isSubscribed: false,
+ *   id: "user_01HX...",
+ *   login: "jack",
+ *   email: "jack@example.com",
+ *   passwordHash: "updated$2b$...",
+ *   role: "customer",
+ *   createdAt: "2025-04-01T00:00:00Z",
  * });
  * ```
+ *
+ * @param user - The full User object to overwrite in the database.
+ * @throws If the atomic set operation fails.
  */
-export async function updateUser(user: User) {
-  const usersKey = ["users", user.login];
-  const usersBySessionKey = ["users_by_session", user.sessionId];
+export async function updateUser(user: User): Promise<void> {
+  const userKey = ["user", user.id];
 
-  const atomicOp = kv.atomic()
-    .set(usersKey, user)
-    .set(usersBySessionKey, user);
+  const res = await kv.atomic()
+      .set(userKey, user)
+      .commit();
 
-  if (user.stripeCustomerId !== undefined) {
-    const usersByStripeCustomerKey = [
-      "users_by_stripe_customer",
-      user.stripeCustomerId,
-    ];
-    atomicOp
-      .set(usersByStripeCustomerKey, user);
+  if (!res.ok) {
+    console.error("❌ Failed to update user:", user.id);
+    throw new Error("Failed to update user");
   }
 
-  const res = await atomicOp.commit();
-  if (!res.ok) throw new Error("Failed to update user");
+  console.log("✅ User updated:", user.id);
 }
 
 /**
- * Updates the session ID of a given user in the database.
+ * Deletes a user from the database using their ID.
+ * This removes the user from the `["user", id]` key.
  *
  * @example
  * ```ts
- * import { updateUserSession } from "@/utils/db.ts";
+ * import { deleteUser } from "@/utils/db.ts";
  *
- * await updateUserSession({
- *   login: "john",
- *   sessionId: "xxx",
- *   isSubscribed: false,
- * }, "yyy");
+ * await deleteUser("user_01HX...");
  * ```
+ *
+ * @param id - The ULID or UUID of the user to delete.
+ * @throws If the deletion fails.
  */
-export async function updateUserSession(user: User, sessionId: string) {
-  const userKey = ["users", user.login];
-  const oldUserBySessionKey = ["users_by_session", user.sessionId];
-  const newUserBySessionKey = ["users_by_session", sessionId];
-  const newUser: User = { ...user, sessionId };
-
-  const atomicOp = kv.atomic()
-    .set(userKey, newUser)
-    .delete(oldUserBySessionKey)
-    .check({ key: newUserBySessionKey, versionstamp: null })
-    .set(newUserBySessionKey, newUser);
-
-  if (user.stripeCustomerId !== undefined) {
-    const usersByStripeCustomerKey = [
-      "users_by_stripe_customer",
-      user.stripeCustomerId,
-    ];
-    atomicOp
-      .set(usersByStripeCustomerKey, user);
+export async function deleteUser(id: string): Promise<void> {
+  try {
+    await kv.delete(["user", id]);
+    console.log("✅ User deleted:", id);
+  } catch (err) {
+    console.error("❌ Failed to delete user:", id);
+    throw err;
   }
-
-  const res = await atomicOp.commit();
-  if (!res.ok) throw new Error("Failed to update user session");
 }
 
 /**
- * Gets the user with the given login from the database.
+ * Gets the user with the given ID from the database.
  *
  * @example
  * ```ts
  * import { getUser } from "@/utils/db.ts";
  *
- * const user = await getUser("jack");
- * user?.login; // Returns "jack"
- * user?.sessionId; // Returns "xxx"
- * user?.isSubscribed; // Returns false
+ * const user = await getUser("user_01HX...");
+ * user?.login;     // → "jack"
+ * user?.email;     // → "jack@example.com"
+ * user?.role;      // → "brand"
  * ```
  */
-export async function getUser(login: string) {
-  const res = await kv.get<User>(["users", login]);
+export async function getUser(id: string): Promise<User | null> {
+  const res = await kv.get<User>(["user", id]);
   return res.value;
 }
 
 /**
- * Gets the user with the given session ID from the database. The first attempt
- * is done with eventual consistency. If that returns `null`, the second
- * attempt is done with strong consistency. This is done for performance
- * reasons, as this function is called in every route request for checking
- * whether the session user is signed in.
- *
- * @example
- * ```ts
- * import { getUserBySession } from "@/utils/db.ts";
- *
- * const user = await getUserBySession("xxx");
- * user?.login; // Returns "jack"
- * user?.sessionId; // Returns "xxx"
- * user?.isSubscribed; // Returns false
- * ```
- */
-export async function getUserBySession(sessionId: string) {
-  const key = ["users_by_session", sessionId];
-  const eventualRes = await kv.get<User>(key, {
-    consistency: "eventual",
-  });
-  if (eventualRes.value !== null) return eventualRes.value;
-  const res = await kv.get<User>(key);
-  return res.value;
-}
-
-/**
- * Gets a user by their given Stripe customer ID from the database.
- *
- * @example
- * ```ts
- * import { getUserByStripeCustomer } from "@/utils/db.ts";
- *
- * const user = await getUserByStripeCustomer("123");
- * user?.login; // Returns "jack"
- * user?.sessionId; // Returns "xxx"
- * user?.isSubscribed; // Returns false
- * user?.stripeCustomerId; // Returns "123"
- * ```
- */
-export async function getUserByStripeCustomer(stripeCustomerId: string) {
-  const res = await kv.get<User>([
-    "users_by_stripe_customer",
-    stripeCustomerId,
-  ]);
-  return res.value;
-}
-
-/**
- * Returns a {@linkcode Deno.KvListIterator} which can be used to iterate over
- * the usuarios in the database.
+ * Returns a {@linkcode Deno.KvListIterator} to iterate over all users in the database.
  *
  * @example
  * ```ts
  * import { listUsers } from "@/utils/db.ts";
  *
  * for await (const entry of listUsers()) {
- *   entry.value.login; // Returns "jack"
- *   entry.value.sessionId; // Returns "xxx"
- *   entry.value.isSubscribed; // Returns false
+ *   entry.value.id;       // → "user_01HX..."
+ *   entry.value.login;    // → "jack"
+ *   entry.value.email;    // → "jack@example.com"
+ *   entry.value.role;     // → "customer"
  * }
  * ```
  */
 export function listUsers(options?: Deno.KvListOptions) {
-  return kv.list<User>({ prefix: ["users"] }, options);
-}
-
-/**
- * Returns a boolean array indicating whether the given produtos have been voted
- * for by the given user in the database.
- *
- * @example
- * ```ts
- * import { getAreVotedByUser } from "@/utils/db.ts";
- *
- * const produtos = [
- *   {
- *     id: "01H9YD2RVCYTBVJEYEJEV5D1S1",
- *     userLogin: "jack",
- *     title: "Jack voted for this",
- *     url: "http://example.com",
- *     score: 1,
- *   },
- *   {
- *     id: "01H9YD2RVCYTBVJEYEJEV5D1S2",
- *     userLogin: "jill",
- *     title: "Jack didn't vote for this",
- *     url: "http://youtube.com",
- *     score: 0,
- *   }
- * ];
- * await getAreVotedByUser(produtos, "jack"); // Returns [true, false]
- * ```
- */
-export async function getAreVotedByUser(products: Product[], userLogin: string) {
-  const votedProducts = await collectValues(listProductsVotedByUser(userLogin));
-  const votedProductsIds = votedProducts.map((product) => product.id);
-  return products.map((product) => votedProductsIds.includes(product.id));
+  return kv.list<User>({ prefix: ["user"] }, options);
 }
