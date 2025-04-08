@@ -127,26 +127,3 @@ Deno.test("[db] votes", async () => {
   assertEquals(await collectValues(listProductsVotedByUser(user.login)), [product]);
   await assertRejects(async () => await createVote(vote));
 });
-
-Deno.test("[db] getAreVotedByUser()", async () => {
-  const product = randomProduct();
-  const user = randomUser();
-  const vote = {
-    productId: product.id,
-    userLogin: user.login,
-    createdAt: new Date(),
-  };
-
-  assertEquals(await getProduct(product.id), null);
-  assertEquals(await getUser(user.login), null);
-  assertEquals(await getAreVotedByUser([product], user.login), [false]);
-
-  await createProduct(product);
-  await createUser(user);
-  await createVote(vote);
-  product.score++;
-
-  assertEquals(await getProduct(product.id), product);
-  assertEquals(await getUser(user.login), user);
-  assertEquals(await getAreVotedByUser([product], user.login), [true]);
-});

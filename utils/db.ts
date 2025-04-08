@@ -84,6 +84,7 @@ export interface Product {
   brandId: string;
   title: string;
   price: number; // price in BRL
+  description: string;
   images: string[];
   categoryId: string;
   createdAt: string; // ISO timestamp
@@ -119,6 +120,7 @@ export interface Order {
   items: OrderItem[];
   total: number;
   placedAt: string;
+  notes?: string;
   status: OrderStatus;
   shippingAddressId: string;
   paymentMethodId: string;
@@ -135,6 +137,26 @@ export interface Address {
   country: string;
   phone?: string;
 }
+
+type ShippingCarrier = 'correios' | 'custom' | 'manual';
+type ShippingStatus = 'pending' | 'in_transit' | 'delivered' | 'failed';
+
+export interface Shipping {
+  id: string;                // ULID, matches Order.id or separate
+  orderId: string;           // FK to Order
+  carrier: ShippingCarrier;  // Which carrier is handling it
+  trackingCode?: string;     // e.g., "BR123456789BR"
+  estimatedDelivery?: string; // ISO timestamp
+  status: ShippingStatus;
+  lastUpdated: string;       // ISO timestamp
+  history?: Array<{
+    status: ShippingStatus;
+    timestamp: string;       // ISO
+    location?: string;
+    note?: string;
+  }>;
+}
+
 
 export interface PaymentMethod {
   id: string; // reference to Stripe setup ID or similar
@@ -158,6 +180,7 @@ export const random = {
       categoryId: params.categoryId,
       title: `${chance.word({ length: 4 })} ${chance.animal()}`,
       price: chance.integer({ min: 5000, max: 25000 }),
+      description:`${chance.word({ length: 4 })} ${chance.animal()}`,
       images: [chance.url({ domain: "cdn.example.com" })],
       createdAt: new Date().toISOString(),
       inventory: chance.integer({ min: 0, max: 100 }),
@@ -258,6 +281,42 @@ export const random = {
     };
   },
 
+  shipping(params: { orderId: string }): Shipping {
+    const carrier = chance.pickone<ShippingCarrier>([
+      "correios",
+      "custom",
+      "manual",
+    ]);
+
+    const now = new Date();
+    const deliveryETA = new Date(now.getTime() + chance.integer({ min: 3, max: 10 }) * 24 * 60 * 60 * 1000); // 3-10 days later
+
+    return {
+      id: ulid(),
+      orderId: params.orderId,
+      carrier,
+      trackingCode: carrier === "correios"
+          ? `BR${chance.integer({ min: 100000000, max: 999999999 })}BR`
+          : undefined,
+      estimatedDelivery: deliveryETA.toISOString(),
+      status: chance.pickone<ShippingStatus>([
+        "pending",
+        "in_transit",
+        "delivered",
+        "failed",
+      ]),
+      lastUpdated: now.toISOString(),
+      history: [
+        {
+          status: "pending",
+          timestamp: now.toISOString(),
+          location: chance.city(),
+          note: "Shipment created",
+        },
+      ],
+    };
+  },
+
   paymentMethod(params: { userId: string }): PaymentMethod {
     const last4 = chance.cc({ type: "Visa" }).slice(-4);
     return {
@@ -299,6 +358,7 @@ export const random = {
       items,
       total,
       placedAt: new Date().toISOString(),
+      notes:`${chance.word({ length: 4 })} ${chance.animal()}`,
       status: chance.pickone<OrderStatus>([
         "pending",
         "paid",
