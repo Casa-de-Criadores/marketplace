@@ -43,7 +43,6 @@ export interface Product {
   // Uses ULID
   id: string;
   brandId: string;
-  userLogin: string;
   title: string;
   url: string;
   score: number;
